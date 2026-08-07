@@ -12,11 +12,11 @@ from requests.auth import HTTPBasicAuth
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from tests.mock_server import start_server, stop_server, PORT
-import webinvader
-from webinvader import WebInvaderApp
+import capture_replay
+from capture_replay import WebInvaderApp, matches_filter, make_record_hash, build_traffic_record, ReplayEngine
 
 
-class TestWebInvader(unittest.TestCase):
+class TestCaptureReplay(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # Start mock server
@@ -24,9 +24,9 @@ class TestWebInvader(unittest.TestCase):
         time.sleep(1)  # Allow port to bind
 
         # Mock messageboxes globally to avoid blocking
-        webinvader.messagebox.showinfo = lambda title, message, **kwargs: None
-        webinvader.messagebox.showerror = lambda title, message, **kwargs: None
-        webinvader.messagebox.showwarning = lambda title, message, **kwargs: None
+        capture_replay.messagebox.showinfo = lambda title, message, **kwargs: None
+        capture_replay.messagebox.showerror = lambda title, message, **kwargs: None
+        capture_replay.messagebox.showwarning = lambda title, message, **kwargs: None
 
     @classmethod
     def tearDownClass(cls):
@@ -41,12 +41,30 @@ class TestWebInvader(unittest.TestCase):
         self.app.pattern_entry.delete(0, "end")
         self.app.pattern_entry.insert(0, "*")
 
+        # Cache active targets for testing check_and_capture
+        self.app.active_target_host = f"http://127.0.0.1:{PORT}"
+        self.app.active_pattern = "*"
+
     def tearDown(self):
         self.app.stop_all_captures()
         try:
             self.app.destroy()
         except Exception:
             pass
+
+    def test_matches_filter_wildcard_and_patterns(self):
+        target = f"http://127.0.0.1:{PORT}"
+
+        # Test wildcard match
+        self.assertTrue(matches_filter(f"{target}/api/v2/items", target, "*"))
+        self.assertTrue(matches_filter(f"{target}/other-endpoint", target, "*"))
+
+        # Test specific pattern match
+        self.assertTrue(matches_filter(f"{target}/api/v2/items", target, "api/v2"))
+        self.assertFalse(matches_filter(f"{target}/other-endpoint", target, "api/v2"))
+
+        # Test host mismatch
+        self.assertFalse(matches_filter("http://example.com/api/v2/items", target, "api/v2"))
 
     def test_domain_and_pattern_filtering_and_capture(self):
         # Test exact host with wildcard pattern (*)
@@ -80,8 +98,7 @@ class TestWebInvader(unittest.TestCase):
         self.assertEqual(self.app.capture_queue.qsize(), 0)  # Queued count stays 0 due to skip
 
         # Test specific pattern matching (e.g. pattern = "api/v2")
-        self.app.pattern_entry.delete(0, "end")
-        self.app.pattern_entry.insert(0, "api/v2")
+        self.app.active_pattern = "api/v2"
 
         # This matches pattern api/v2
         self.app.check_and_capture(
@@ -109,11 +126,11 @@ class TestWebInvader(unittest.TestCase):
         self.app.process_capture_queue()
         self.assertEqual(len(self.app.captured_requests), 2)  # Stays 2
 
-    @patch("webinvader.HttpNtlmAuth", side_effect=HTTPBasicAuth, create=True)
+    @patch("capture_replay.HttpNtlmAuth", side_effect=HTTPBasicAuth, create=True)
     def test_ntlm_authentication_replay(self, mock_ntlm):
         url = f"http://127.0.0.1:{PORT}/ntlm-auth"
 
-        resp = self.app.run_http_request(
+        resp = ReplayEngine.execute(
             method="GET",
             url=url,
             headers='{"Content-Type": "application/json"}',
@@ -147,15 +164,15 @@ class TestWebInvader(unittest.TestCase):
             self.app.write_csv_file(temp_csv, self.app.captured_requests)
             self.assertTrue(os.path.exists(temp_csv))
 
-            # Mock filedialog.askopenfilename directly on the webinvader module
-            original_ask = webinvader.filedialog.askopenfilename
-            webinvader.filedialog.askopenfilename = lambda **kwargs: temp_csv
+            # Mock filedialog.askopenfilename directly on the capture_replay module
+            original_ask = capture_replay.filedialog.askopenfilename
+            capture_replay.filedialog.askopenfilename = lambda **kwargs: temp_csv
 
-            # Execute CSV Import
-            self.app.upload_csv()
+            # Execute CSV Import via CSVReplayFrame
+            self.app.csv_replay_frame.upload_csv()
 
             # Restore
-            webinvader.filedialog.askopenfilename = original_ask
+            capture_replay.filedialog.askopenfilename = original_ask
 
             # Check if imported successfully
             self.assertEqual(len(self.app.replay_requests), 1)

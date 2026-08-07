@@ -1,6 +1,6 @@
 # WebInvader — API Traffic Capturer v0.4
 
-A lightweight Python GUI application for HTTP traffic capture & replay supporting Chrome DevTools Protocol (CDP), CSV Upload & Replay, Custom API Request Sender (Postman Lite), and an Inbuilt Proxy Interceptor.
+A lightweight Python GUI application for HTTP traffic capture & replay supporting Chrome DevTools Protocol (CDP), CSV Upload & Replay, Custom API Request Sender (Postman Lite / Inbuilt Browser), and an Inbuilt Proxy Interceptor.
 
 The application has been upgraded with a modern, clean light-theme interface, an integrated custom sender, and advanced pattern and rendering support.
 
@@ -23,7 +23,7 @@ The application has been upgraded with a modern, clean light-theme interface, an
 - **Request/Response Inspector**:
   - Browse captured requests with modern, light, clean arrow navigation (10-per-page pagination).
   - Detailed sub-tabs: Request details (headers/body), Response details (headers/body), and **Render Visual** to preview how the response looks inside a web browser.
-- **Custom Request Sender (Postman Lite)**:
+- **Custom Request Sender / Inbuilt Browser (Postman Lite)**:
   - Create and execute custom calls on-the-fly.
   - Supports custom HTTP Methods (GET, POST, PUT, DELETE, PATCH, HEAD), editable request headers, bodies, and Auth credentials (NTLM, Basic Auth, Bearer Token).
   - **Right-Click Integration**: Send any selected request from the Capture or Replay tables straight to the Custom Request Sender via a neat right-click context menu.
@@ -48,7 +48,7 @@ playwright install chromium
 ### Running the App
 To start the GUI application:
 ```bash
-python webinvader.py
+python capture_replay.py
 ```
 
 ### Main Capture Dashboard
@@ -66,7 +66,7 @@ python webinvader.py
 4. Click **▶ Replay Selected** or **▶▶ Replay All** to replay live and view real-time responses!
 
 ### Custom Request Sender (Postman Lite)
-1. Navigate to the **🚀 CUSTOM REQUEST SENDER (Postman Lite)** tab.
+1. Navigate to the **🚀 CUSTOM SENDER** tab.
 2. Enter your Method, URL, Headers, and Body.
 3. Choose your Authentication method.
 4. Click **SEND REQUEST 🚀** to execute the call.
@@ -87,17 +87,17 @@ python tests/mock_server.py
 ### Running Automated Unit Tests
 To execute all test suites (including Domain & Pattern filtering, CSV Import/Export, and NTLM Auth Replay):
 ```bash
-xvfb-run -a python -m unittest tests/test_webinvader.py -v
+xvfb-run -a python -m unittest tests/test_capture_replay.py -v
 ```
 
 ---
 
 ## Compiling into a Standalone Executable
 
-To compile `webinvader.py` into a single standalone binary using PyInstaller:
+To compile `capture_replay.py` into a single standalone binary using PyInstaller:
 
 ```bash
-pyinstaller --onefile webinvader.py
+pyinstaller --onefile capture_replay.py
 ```
 
-The compiled binary will be generated under the `dist/` directory (e.g. `dist/webinvader` or `dist/webinvader.exe`).
+The compiled binary will be generated under the `dist/` directory (e.g. `dist/capture_replay` or `dist/capture_replay.exe`).
