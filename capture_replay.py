@@ -1361,22 +1361,45 @@ class WebInvaderApp(tk.Tk):
         if not matches_filter(url, self.active_targets):
             return
 
-        # Deduplication skipping identical requests (method, url, body)
+        # Fast-path early discard if it is already captured and committed in the main list.
+        # This keeps the queue clean and keeps the synchronous test suite assertions happy.
         record_hash = make_record_hash(url, method, req_body, status_code)
         for item in self.captured_requests:
             item_hash = make_record_hash(item["url"], item["method"], item["request_body"], item["status_code"])
             if item_hash == record_hash:
                 return
 
-        new_id = len(self.captured_requests) + 1
-        record = build_traffic_record(new_id, method, url, req_headers, req_body, status_code, resp_headers, resp_body)
+        # Send raw item with placeholder ID to prevent duplicate ID race conditions in background threads.
+        # Double-check deduplication is performed safely and strictly inside the main GUI thread polling loop.
+        record = build_traffic_record(0, method, url, req_headers, req_body, status_code, resp_headers, resp_body)
         self.capture_queue.put(record)
 
     def process_capture_queue(self):
+        updated = False
         while not self.capture_queue.empty():
             item = self.capture_queue.get()
+
+            # Safe thread-safe deduplication skipping identical requests (method, url, body) on the main GUI thread
+            record_hash = make_record_hash(item["url"], item["method"], item["request_body"], item["status_code"])
+            is_dup = False
+            for existing in self.captured_requests:
+                existing_hash = make_record_hash(existing["url"], existing["method"], existing["request_body"], existing["status_code"])
+                if existing_hash == record_hash:
+                    is_dup = True
+                    break
+            if is_dup:
+                continue
+
+            # Assign sequential unique ID strictly on the main GUI thread to avoid duplicate ID race conditions!
+            new_id = len(self.captured_requests) + 1
+            item["id"] = new_id
+
             self.captured_requests.append(item)
+            updated = True
+
+        if updated:
             self.update_capture_table()
+
         self.after(100, self.process_capture_queue)
 
     def update_capture_table(self):
