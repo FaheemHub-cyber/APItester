@@ -1,0 +1,6 @@
+requests
+requests-ntlm
+beautifulsoup4
+tkinterweb
+playwright
+pyinstaller
