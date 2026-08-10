@@ -1,6 +1,7 @@
 import http.server
 import socketserver
 import json
+import os
 import threading
 
 PORT = 13845
@@ -10,8 +11,23 @@ class MockHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         pass # suppress console logging
 
     def do_GET(self):
-        # 1. NTLM / Auth mock route
-        if self.path == "/ntlm-auth":
+        # Serve the dynamic Amazon Lite test store
+        if self.path == "/" or self.path == "/index.html" or self.path.startswith("/test-web-ui"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+
+            # Look up path
+            filepath = "test web ui/index.html"
+            if os.path.exists(filepath):
+                with open(filepath, "rb") as f:
+                    self.wfile.write(f.read())
+            else:
+                self.wfile.write(b"Amazon Lite Storefront file not found.")
+            return
+
+        # NTLM / Auth mock route
+        elif self.path == "/ntlm-auth":
             auth_header = self.headers.get("Authorization", "")
             if not auth_header:
                 self.send_response(401)
@@ -34,33 +50,20 @@ class MockHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b"Bad Request")
             return
 
-        # 2. HTML Rendering mock route
-        elif self.path == "/" or self.path == "/index.html":
+        # E-commerce products endpoint
+        elif self.path == "/api/v1/products":
             self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Type", "application/json")
             self.end_headers()
-            html = """<!DOCTYPE html>
-<html>
-<head>
-    <title>WebInvader Mock Server</title>
-    <style>body { font-family: sans-serif; background-color: #f0f2f5; margin: 40px; }</style>
-</head>
-<body>
-    <h1>Welcome to WebInvader Test Application</h1>
-    <p>This is a sample HTML response rendered by WebInvader browser viewer.</p>
-    <div style="padding: 15px; background-color: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-        <h3>Interactive Form</h3>
-        <form action="/api/v2/items" method="POST">
-            <label>Name: <input type="text" name="name" value="TestItem"/></label>
-            <input type="submit" value="Submit Form"/>
-        </form>
-    </div>
-</body>
-</html>"""
-            self.wfile.write(html.encode("utf-8"))
+            products = [
+                {"id": 101, "name": "Python Hacking Secrets", "price": 29.99},
+                {"id": 102, "name": "Wireless Noise-Canceling Headphones", "price": 199.99},
+                {"id": 103, "name": "Mechanical Keyboard (RGB)", "price": 89.99}
+            ]
+            self.wfile.write(json.dumps(products).encode("utf-8"))
             return
 
-        # 3. Simple JSON item endpoint
+        # Legacy items route
         elif self.path == "/api/v2/items":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -68,24 +71,32 @@ class MockHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"items": [{"id": 1, "name": "TestItem"}]}).encode("utf-8"))
             return
 
-        # 4. Exclude filter pattern check
-        elif self.path == "/other-endpoint":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"Other Endpoint Content")
-            return
-
         self.send_response(404)
         self.end_headers()
         self.wfile.write(b"Not Found")
 
     def do_POST(self):
-        if self.path == "/api/v2/items":
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_length) if content_length > 0 else b""
+        content_length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(content_length) if content_length > 0 else b""
 
-            # Echo input in response
+        # E-commerce cart and checkout endpoints
+        if self.path == "/api/v1/cart":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            resp_data = {"status": "success", "message": "Cart synchronized", "cart_size": len(body)}
+            self.wfile.write(json.dumps(resp_data).encode("utf-8"))
+            return
+
+        elif self.path == "/api/v1/checkout":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            resp_data = {"status": "success", "order_id": "AL-83748293", "message": "Checkout completed"}
+            self.wfile.write(json.dumps(resp_data).encode("utf-8"))
+            return
+
+        elif self.path == "/api/v2/items":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()

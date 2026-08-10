@@ -48,7 +48,7 @@ class TestCaptureReplay(unittest.TestCase):
         self.app.pattern_entry.insert(0, "*")
 
         # Initialize targets
-        self.app.targets = [{"host": f"http://127.0.0.1:{PORT}", "pattern": "*"}]
+        self.app.targets = [{"host": f"http://localhost:{PORT}", "pattern": "*"}]
         self.app.active_targets = list(self.app.targets)
 
     def tearDown(self):
@@ -64,6 +64,17 @@ class TestCaptureReplay(unittest.TestCase):
         # Test wildcard match
         self.assertTrue(matches_filter(f"http://127.0.0.1:{PORT}/api/v2/items", targets))
         self.assertTrue(matches_filter(f"http://127.0.0.1:{PORT}/other-endpoint", targets))
+
+    def test_localhost_and_ip_equivalence(self):
+        # Test that localhost and 127.0.0.1 are matched interchangeably
+        targets_localhost = [{"host": f"http://localhost:{PORT}", "pattern": "*"}]
+        targets_ip = [{"host": f"http://127.0.0.1:{PORT}", "pattern": "*"}]
+
+        url_localhost = f"http://localhost:{PORT}/api/v1/products"
+        url_ip = f"http://127.0.0.1:{PORT}/api/v1/products"
+
+        self.assertTrue(matches_filter(url_ip, targets_localhost))
+        self.assertTrue(matches_filter(url_localhost, targets_ip))
 
     def test_multi_target_capture(self):
         # Setup multiple targets: one exact pattern and one other pattern
@@ -130,6 +141,47 @@ class TestCaptureReplay(unittest.TestCase):
         self.assertNotIn("X-Disabled-Header", parsed)
         self.assertNotIn("//X-Disabled-Header", parsed)
 
+    def test_duplicate_different_body_captured(self):
+        # Setup: capture two requests with identical URL & method but different bodies
+        self.app.check_and_capture(
+            method="POST",
+            url=f"http://127.0.0.1:{PORT}/api/v1/cart",
+            req_headers="Content-Type: application/json",
+            req_body=b'{"item": "book"}',
+            status_code=200,
+            resp_headers={},
+            resp_body=b'{"status": "ok"}'
+        )
+        self.assertEqual(self.app.capture_queue.qsize(), 1)
+        self.app.process_capture_queue()
+
+        # Send different body -> should be captured (NOT skipped as duplicate)
+        self.app.check_and_capture(
+            method="POST",
+            url=f"http://127.0.0.1:{PORT}/api/v1/cart",
+            req_headers="Content-Type: application/json",
+            req_body=b'{"item": "laptop"}',
+            status_code=200,
+            resp_headers={},
+            resp_body=b'{"status": "ok"}'
+        )
+        self.assertEqual(self.app.capture_queue.qsize(), 1)
+        self.app.process_capture_queue()
+        self.assertEqual(len(self.app.captured_requests), 2)
+
+        # Send identical request -> should be skipped as duplicate
+        self.app.check_and_capture(
+            method="POST",
+            url=f"http://127.0.0.1:{PORT}/api/v1/cart",
+            req_headers="Content-Type: application/json",
+            req_body=b'{"item": "laptop"}',
+            status_code=200,
+            resp_headers={},
+            resp_body=b'{"status": "ok"}'
+        )
+        self.assertEqual(self.app.capture_queue.qsize(), 0)
+        self.assertEqual(len(self.app.captured_requests), 2)
+
     def test_domain_and_pattern_filtering_and_capture(self):
         # Test exact host with wildcard pattern (*)
         self.app.check_and_capture(
@@ -148,18 +200,6 @@ class TestCaptureReplay(unittest.TestCase):
         self.assertEqual(len(self.app.captured_requests), 1)
         self.assertEqual(self.app.captured_requests[0]["method"], "GET")
         self.assertEqual(self.app.captured_requests[0]["url"], f"http://127.0.0.1:{PORT}/api/v2/items")
-
-        # Test duplicate detection: Same request should not be captured twice
-        self.app.check_and_capture(
-            method="GET",
-            url=f"http://127.0.0.1:{PORT}/api/v2/items",
-            req_headers="Content-Type: application/json",
-            req_body=b"",
-            status_code=200,
-            resp_headers={},
-            resp_body=b'{"items": []}'
-        )
-        self.assertEqual(self.app.capture_queue.qsize(), 0)  # Queued count stays 0 due to skip
 
     @patch("capture_replay.HttpNtlmAuth", side_effect=HTTPBasicAuth, create=True)
     def test_ntlm_authentication_replay(self, mock_ntlm):

@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amazon Lite Storefront</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            margin: 0;
+            background-color: #f8f9fa;
+            color: #212529;
+        }
+        header {
+            background-color: #131921;
+            color: white;
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        header h1 {
+            margin: 0;
+            font-size: 24px;
+            color: #ff9900;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 30px auto;
+            padding: 0 20px;
+            display: grid;
+            grid-template-columns: 3fr 1fr;
+            gap: 30px;
+        }
+        .products-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 20px;
+        }
+        .product-card {
+            background-color: white;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .product-card h3 {
+            margin-top: 0;
+            font-size: 16px;
+        }
+        .product-card .price {
+            font-size: 18px;
+            font-weight: bold;
+            color: #b12704;
+            margin: 10px 0;
+        }
+        button {
+            background-color: #ffd814;
+            border: 1px solid #fcd200;
+            border-radius: 20px;
+            padding: 8px 15px;
+            cursor: pointer;
+            font-weight: bold;
+            color: #0f1111;
+        }
+        button:hover {
+            background-color: #f7ca00;
+        }
+        .cart-card {
+            background-color: white;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            height: fit-content;
+        }
+        .cart-item {
+            display: flex;
+            justify-content: space-between;
+            border-bottom: 1px solid #eee;
+            padding: 10px 0;
+            font-size: 14px;
+        }
+        .logs-panel {
+            background-color: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 30px auto;
+            max-width: 1160px;
+        }
+        pre {
+            background-color: #f1f3f5;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>amazon<span>lite</span></h1>
+        <div id="cart-count">Items in Cart: 0</div>
+    </header>
+
+    <div class="container">
+        <!-- Products List -->
+        <div>
+            <h2>Featured Products</h2>
+            <div class="products-grid" id="products-container">
+                <!-- Products loaded dynamically or fallback -->
+                <div class="product-card">
+                    <div>
+                        <h3>Python Hacking Secrets</h3>
+                        <p class="price">$29.99</p>
+                    </div>
+                    <button onclick="addToCart('Python Hacking Secrets', 29.99)">Add to Cart</button>
+                </div>
+                <div class="product-card">
+                    <div>
+                        <h3>Wireless Noise-Canceling Headphones</h3>
+                        <p class="price">$199.99</p>
+                    </div>
+                    <button onclick="addToCart('Wireless Noise-Canceling Headphones', 199.99)">Add to Cart</button>
+                </div>
+                <div class="product-card">
+                    <div>
+                        <h3>Mechanical Keyboard (RGB)</h3>
+                        <p class="price">$89.99</p>
+                    </div>
+                    <button onclick="addToCart('Mechanical Keyboard (RGB)', 89.99)">Add to Cart</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Shopping Cart Panel -->
+        <div class="cart-card">
+            <h2>Your Cart</h2>
+            <div id="cart-items">
+                <p style="color: #6c757d;">Your cart is empty.</p>
+            </div>
+            <h3 style="margin-top: 20px;" id="cart-total">Total: $0.00</h3>
+            <button style="width: 100%; margin-top: 15px; background-color: #ffa41c; border-color: #ff8f00;" onclick="checkout()">Proceed to Checkout</button>
+        </div>
+    </div>
+
+    <!-- Interactive Debugging Logs -->
+    <div class="logs-panel">
+        <h2>📡 Outgoing Client API Calls Log</h2>
+        <button onclick="fetchProductsFromServer()">Reload Products List (GET)</button>
+        <pre id="api-log">Click buttons above or add items to cart to send HTTP calls and inspect here...</pre>
+    </div>
+
+    <script>
+        let cart = [];
+
+        function logApiCall(method, url, requestBody, responseStatus, responseData) {
+            const pre = document.getElementById("api-log");
+            const logEntry = `[${new Date().toLocaleTimeString()}] ${method} ${url}\nRequest Body: ${JSON.stringify(requestBody)}\nResponse Status: ${responseStatus}\nResponse Data: ${JSON.stringify(responseData)}\n----------------------------------------\n`;
+            pre.innerHTML = logEntry + pre.innerHTML;
+        }
+
+        async function fetchProductsFromServer() {
+            try {
+                const res = await fetch("/api/v1/products");
+                const data = await res.json();
+                logApiCall("GET", "/api/v1/products", null, res.status, data);
+            } catch (err) {
+                console.error("Fetch products failed:", err);
+            }
+        }
+
+        async function addToCart(name, price) {
+            cart.push({ name, price });
+            updateCartUI();
+
+            // Post cart update to server API
+            try {
+                const payload = { cart: cart };
+                const res = await fetch("/api/v1/cart", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                logApiCall("POST", "/api/v1/cart", payload, res.status, data);
+            } catch (err) {
+                console.error("Post cart failed:", err);
+            }
+        }
+
+        function updateCartUI() {
+            document.getElementById("cart-count").innerText = `Items in Cart: ${cart.length}`;
+            const container = document.getElementById("cart-items");
+            if (cart.length === 0) {
+                container.innerHTML = `<p style="color: #6c757d;">Your cart is empty.</p>`;
+                document.getElementById("cart-total").innerText = "Total: $0.00";
+                return;
+            }
+
+            let html = "";
+            let total = 0;
+            cart.forEach(item => {
+                html += `<div class="cart-item"><span>${item.name}</span><span>$${item.price.toFixed(2)}</span></div>`;
+                total += item.price;
+            });
+            container.innerHTML = html;
+            document.getElementById("cart-total").innerText = `Total: $${total.toFixed(2)}`;
+        }
+
+        async function checkout() {
+            if (cart.length === 0) {
+                alert("Please add items to cart before proceeding.");
+                return;
+            }
+
+            const payload = { items: cart, timestamp: Date.now() };
+            try {
+                const res = await fetch("/api/v1/checkout", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                logApiCall("POST", "/api/v1/checkout", payload, res.status, data);
+
+                alert("Order placed successfully!");
+                cart = [];
+                updateCartUI();
+            } catch (err) {
+                console.error("Checkout failed:", err);
+            }
+        }
+    </script>
+</body>
+</html>

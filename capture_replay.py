@@ -123,6 +123,12 @@ def matches_filter(url, targets):
     if not url or not targets:
         return False
 
+    parsed_url = urllib.parse.urlparse(url)
+    url_netloc = parsed_url.netloc.lower()
+
+    # Normalize localhost / 127.0.0.1 to treat them as equivalent
+    url_netloc_norm = url_netloc.replace("localhost", "127.0.0.1")
+
     for target in targets:
         host = target.get("host", "").strip()
         pattern = target.get("pattern", "").strip()
@@ -131,12 +137,13 @@ def matches_filter(url, targets):
             continue
 
         parsed_target = urllib.parse.urlparse(host)
-        parsed_url = urllib.parse.urlparse(url)
+        target_netloc = parsed_target.netloc.lower()
+        target_netloc_norm = target_netloc.replace("localhost", "127.0.0.1")
 
         # 1. Domain/Host verification
         host_match = False
-        if parsed_target.netloc:
-            if parsed_target.netloc.lower() in parsed_url.netloc.lower() or host.lower() in url.lower():
+        if target_netloc_norm:
+            if target_netloc_norm in url_netloc_norm or host.lower() in url.lower():
                 host_match = True
         else:
             if host.lower() in url.lower():
@@ -201,7 +208,7 @@ def make_record_hash(url, method, req_body, status_code):
     body_str = req_body
     if isinstance(body_str, bytes):
         body_str = body_str.decode("utf-8", errors="ignore")
-    raw = f"{url}|{method}|{body_str}|{status_code}"
+    raw = f"{url}|{method}|{body_str}"
     return hashlib.sha256(raw.encode("utf-8", errors="ignore")).hexdigest()
 
 
@@ -881,6 +888,7 @@ class CSVReplayFrame(ttk.Frame):
         page_items = self.app.replay_requests[start:end]
 
         for item in page_items:
+            # Color based on replay status or original status
             status = item.get("status_code", "")
             orig_status = item.get("orig_status", "0")
             tag = classify_status(status) if status else "neutral"
@@ -1353,7 +1361,7 @@ class WebInvaderApp(tk.Tk):
         if not matches_filter(url, self.active_targets):
             return
 
-        # Deduplication skipping identical requests
+        # Deduplication skipping identical requests (method, url, body)
         record_hash = make_record_hash(url, method, req_body, status_code)
         for item in self.captured_requests:
             item_hash = make_record_hash(item["url"], item["method"], item["request_body"], item["status_code"])
