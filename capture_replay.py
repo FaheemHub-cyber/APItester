@@ -102,8 +102,7 @@ class ConfigManager:
             except Exception:
                 pass
         return {
-            "target_host": "http://localhost:13845",
-            "pattern": "*",
+            "targets": [{"host": "http://localhost:13845", "pattern": "*"}],
             "auth_type": "No Auth",
             "username": "",
             "password": "",
@@ -119,30 +118,40 @@ class ConfigManager:
             pass
 
 
-# Filters URLs on Target Host & Matching Pattern
-def matches_filter(url, target_host, pattern):
-    if not url or not target_host or not pattern:
+# Filters URLs on Target Host & Matching Pattern across ALL active target definitions
+def matches_filter(url, targets):
+    if not url or not targets:
         return False
 
-    parsed_target = urllib.parse.urlparse(target_host)
-    parsed_url = urllib.parse.urlparse(url)
+    for target in targets:
+        host = target.get("host", "").strip()
+        pattern = target.get("pattern", "").strip()
 
-    # 1. Domain/Host verification
-    host_match = False
-    if parsed_target.netloc:
-        if parsed_target.netloc.lower() in parsed_url.netloc.lower() or target_host.lower() in url.lower():
-            host_match = True
-    else:
-        if target_host.lower() in url.lower():
-            host_match = True
+        if not host or not pattern:
+            continue
 
-    if not host_match:
-        return False
+        parsed_target = urllib.parse.urlparse(host)
+        parsed_url = urllib.parse.urlparse(url)
 
-    # 2. Pattern verification (Wildcard * captures all requests)
-    if pattern == "*":
-        return True
-    return pattern.lower() in url.lower()
+        # 1. Domain/Host verification
+        host_match = False
+        if parsed_target.netloc:
+            if parsed_target.netloc.lower() in parsed_url.netloc.lower() or host.lower() in url.lower():
+                host_match = True
+        else:
+            if host.lower() in url.lower():
+                host_match = True
+
+        if not host_match:
+            continue
+
+        # 2. Pattern verification (Wildcard * captures all requests)
+        if pattern == "*":
+            return True
+        if pattern.lower() in url.lower():
+            return True
+
+    return False
 
 
 # Returns UI Tag Class for HTTP status code colors
@@ -386,8 +395,9 @@ class CDPClient:
 
                 page.on("response", handle_response)
 
-                # Navigate to active cached target host
-                target_host = self.app.active_target_host
+                # Navigate to the first active target host URL if available
+                targets = self.app.active_targets
+                target_host = targets[0]["host"] if targets else ""
                 if target_host:
                     try:
                         page.goto(target_host)
@@ -439,17 +449,7 @@ class InbuiltProxyServer:
 class ReplayEngine:
     @classmethod
     def execute(cls, method, url, headers, body, auth_type, username="", password="", token=""):
-        req_headers = {}
-        if isinstance(headers, str):
-            try:
-                req_headers = json.loads(headers)
-            except Exception:
-                for line in headers.strip().split("\n"):
-                    if ":" in line:
-                        k, v = line.split(":", 1)
-                        req_headers[k.strip()] = v.strip()
-        elif isinstance(headers, dict):
-            req_headers = headers
+        req_headers = cls.parse_headers(headers)
 
         auth_obj = None
         if auth_type == "Basic Auth":
@@ -474,6 +474,49 @@ class ReplayEngine:
             timeout=15
         )
         return resp
+
+    @classmethod
+    def parse_headers(cls, headers):
+        # Parses newline-separated headers format (e.g. Host: localhost:13845)
+        # Skips rows starting with "//"
+        req_headers = {}
+        if isinstance(headers, dict):
+            return headers
+
+        if isinstance(headers, str):
+            # Check if it looks like JSON
+            trimmed = headers.strip()
+            if trimmed.startswith("{") and trimmed.endswith("}"):
+                try:
+                    return json.loads(trimmed)
+                except Exception:
+                    pass
+
+            # Parsing custom Newline/Colon Format with '//' comment capability
+            for line in headers.split("\n"):
+                line = line.strip()
+                if not line or line.startswith("//"):
+                    continue
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    req_headers[k.strip()] = v.strip()
+        return req_headers
+
+    @classmethod
+    def format_headers(cls, headers_dict):
+        # Formats dict headers to clean newline-separated text rows
+        if not headers_dict:
+            return ""
+        if isinstance(headers_dict, str):
+            try:
+                headers_dict = json.loads(headers_dict)
+            except Exception:
+                return headers_dict
+
+        lines = []
+        for k, v in headers_dict.items():
+            lines.append(f"{k}: {v}")
+        return "\n".join(lines)
 
 
 # API Requester Frame (Postman Lite Custom Sender Interface)
@@ -528,10 +571,10 @@ class InbuiltBrowserFrame(ttk.Frame):
         r3 = ttk.Frame(self)
         r3.pack(fill="both", expand=True, pady=5)
 
-        lf_h = ttk.LabelFrame(r3, text="Request Headers (JSON or key: value)", padding=5)
+        lf_h = ttk.LabelFrame(r3, text="Request Headers (NewLine & Colon separate; prepend // to disable)", padding=5)
         lf_h.pack(side="left", fill="both", expand=True, padx=2)
         self.headers_text = tk.Text(lf_h, wrap="word", height=6, background="#ffffff", relief="flat", borderwidth=1, font=(Theme.FONT_FAMILY, 10))
-        self.headers_text.insert("1.0", '{\n  "Content-Type": "application/json"\n}')
+        self.headers_text.insert("1.0", "Content-Type: application/json\n//Authorization: Bearer my-token-example")
         self.headers_text.pack(fill="both", expand=True)
 
         lf_b = ttk.LabelFrame(r3, text="Request Body / POST Payload", padding=5)
@@ -564,13 +607,10 @@ class InbuiltBrowserFrame(ttk.Frame):
         self.url_entry.delete(0, tk.END)
         self.url_entry.insert(0, item.get("url", ""))
 
-        # Populate Headers
+        # Populate Headers (Formatted cleanly)
         headers = item.get("request_headers", {})
         self.headers_text.delete("1.0", tk.END)
-        if isinstance(headers, dict):
-            self.headers_text.insert("1.0", json.dumps(headers, indent=2))
-        else:
-            self.headers_text.insert("1.0", str(headers))
+        self.headers_text.insert("1.0", ReplayEngine.format_headers(headers))
 
         # Populate Body
         body = item.get("request_body", "")
@@ -997,17 +1037,17 @@ class WebInvaderApp(tk.Tk):
 
         Theme.apply(self)
 
-        # Load and Cache Configuration values securely & thread-safe
+        # Load and Cache targets
         self.config = ConfigManager.load()
-        self.active_target_host = self.config.get("target_host", "http://localhost:13845")
-        self.active_pattern = self.config.get("pattern", "*")
+        self.targets = self.config.get("targets", [{"host": "http://localhost:13845", "pattern": "*"}])
+        self.active_targets = list(self.targets)
 
-        # In-memory states and queue
+        # In-memory queues and tables
         self.capture_queue = queue.Queue()
         self.captured_requests = []
         self.replay_requests = []
 
-        # Selection tracking
+        # Selected trackers
         self.selected_capture_item = None
         self.selected_replay_item = None
 
@@ -1023,7 +1063,6 @@ class WebInvaderApp(tk.Tk):
         self.playwright_running = False
         self.cdp_client = CDPClient(self)
 
-        # Initialize UI
         self.create_widgets()
 
         # Periodically poll queue
@@ -1036,7 +1075,10 @@ class WebInvaderApp(tk.Tk):
         ttk.Label(banner, text="WebInvader — API Traffic Capturer", style="Title.TLabel").pack(side="left")
         ttk.Label(banner, text="  v0.4 [Light Modern Theme]", foreground=Theme.FG_MUTED).pack(side="left", padx=5)
 
-        # Notebook with 4 Tabs
+        # Targets & Patterns Manager UI Panel
+        self.setup_targets_panel()
+
+        # Notebook with Tabs
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -1058,6 +1100,88 @@ class WebInvaderApp(tk.Tk):
         self.notebook.add(self.tab_render, text="🎨 RENDER")
         self.setup_render_tab()
 
+    def setup_targets_panel(self):
+        # Targets & Patterns Config Manager Frame
+        lf_targets = ttk.LabelFrame(self, text="🎯 Active Targets & Patterns Manager", padding=10)
+        lf_targets.pack(fill="x", padx=10, pady=5)
+
+        # Left side inputs
+        lf_inputs = ttk.Frame(lf_targets)
+        lf_inputs.pack(side="left", fill="both", expand=True)
+
+        row1 = ttk.Frame(lf_inputs)
+        row1.pack(fill="x", pady=2)
+        ttk.Label(row1, text="Target Host URL:", width=15).pack(side="left")
+        self.target_host_entry = ttk.Entry(row1, width=35, font=(Theme.FONT_FAMILY, 10))
+        self.target_host_entry.insert(0, "http://localhost:13845")
+        self.target_host_entry.pack(side="left", padx=5)
+
+        row2 = ttk.Frame(lf_inputs)
+        row2.pack(fill="x", pady=2)
+        ttk.Label(row2, text="URL Pattern:", width=15).pack(side="left")
+        self.pattern_entry = ttk.Entry(row2, width=35, font=(Theme.FONT_FAMILY, 10))
+        self.pattern_entry.insert(0, "*")
+        self.pattern_entry.pack(side="left", padx=5)
+
+        row3 = ttk.Frame(lf_inputs)
+        row3.pack(fill="x", pady=5)
+        self.btn_add_target = ttk.Button(row3, text="➕ Add Target Filter", style="Accent.TButton", command=self.add_target)
+        self.btn_add_target.pack(side="left", padx=5)
+        self.btn_remove_target = ttk.Button(row3, text="❌ Remove Selected", command=self.remove_target)
+        self.btn_remove_target.pack(side="left", padx=5)
+
+        # Right side treeview list of active targets
+        lf_view = ttk.Frame(lf_targets)
+        lf_view.pack(side="right", fill="both", expand=True, padx=10)
+
+        cols = ("host", "pattern")
+        self.targets_tree = ttk.Treeview(lf_view, columns=cols, show="headings", height=3)
+        self.targets_tree.heading("host", text="Target Host URL")
+        self.targets_tree.heading("pattern", text="Pattern")
+        self.targets_tree.column("host", width=250, minwidth=150, stretch=True)
+        self.targets_tree.column("pattern", width=120, minwidth=80, stretch=False)
+        self.targets_tree.pack(side="top", fill="both", expand=True)
+
+        # Sync initial targets treeview list
+        self.sync_targets_tree()
+
+    def add_target(self):
+        host = self.target_host_entry.get().strip()
+        pattern = self.pattern_entry.get().strip()
+        if not host or not pattern:
+            messagebox.showwarning("Incomplete Inputs", "Host URL and Pattern fields must be completed.")
+            return
+
+        # Add and save
+        self.targets.append({"host": host, "pattern": pattern})
+        self.config["targets"] = self.targets
+        ConfigManager.save(self.config)
+        self.active_targets = list(self.targets)
+        self.sync_targets_tree()
+
+    def remove_target(self):
+        sel = self.targets_tree.selection()
+        if not sel:
+            messagebox.showwarning("No Selection", "Please select a target filter from the active list first.")
+            return
+
+        idx = int(sel[0])
+        if len(self.targets) <= 1:
+            messagebox.showwarning("Deletion Blocked", "At least one active target filter must remain configured.")
+            return
+
+        self.targets.pop(idx)
+        self.config["targets"] = self.targets
+        ConfigManager.save(self.config)
+        self.active_targets = list(self.targets)
+        self.sync_targets_tree()
+
+    def sync_targets_tree(self):
+        for child in self.targets_tree.get_children():
+            self.targets_tree.delete(child)
+        for i, target in enumerate(self.targets):
+            self.targets_tree.insert("", "end", iid=str(i), values=(target["host"], target["pattern"]))
+
     def setup_capture_tab(self):
         paned = ttk.PanedWindow(self.tab_capture, orient="vertical")
         paned.pack(fill="both", expand=True, padx=5, pady=5)
@@ -1065,33 +1189,20 @@ class WebInvaderApp(tk.Tk):
         controls = ttk.Frame(paned, padding=10)
         paned.add(controls, weight=1)
 
-        # Row 1 Config
+        # Capture Options
         r1 = ttk.Frame(controls)
-        r1.pack(fill="x", pady=2)
-        ttk.Label(r1, text="Target Host URL:").pack(side="left", padx=2)
-        self.target_host_entry = ttk.Entry(r1, width=40, font=(Theme.FONT_FAMILY, 10))
-        self.target_host_entry.insert(0, self.active_target_host)
-        self.target_host_entry.pack(side="left", padx=5)
-
-        ttk.Label(r1, text="URL Pattern (e.g. api/v2 or *):").pack(side="left", padx=10)
-        self.pattern_entry = ttk.Entry(r1, width=25, font=(Theme.FONT_FAMILY, 10))
-        self.pattern_entry.insert(0, self.active_pattern)
-        self.pattern_entry.pack(side="left", padx=5)
-
-        # Row 2 Config
-        r2 = ttk.Frame(controls)
-        r2.pack(fill="x", pady=5)
-        ttk.Label(r2, text="Capture Mode:").pack(side="left", padx=2)
+        r1.pack(fill="x", pady=5)
+        ttk.Label(r1, text="Capture Mode:").pack(side="left", padx=2)
         self.capture_mode_var = tk.StringVar(value="Inbuilt Proxy (Port 8888)")
-        modes = ["Inbuilt Proxy (Port 8888)", "Chrome CDP Browser"]
-        self.capture_mode_cb = ttk.Combobox(r2, textvariable=self.capture_mode_var, values=modes, state="readonly", width=25, font=(Theme.FONT_FAMILY, 10))
+        modes = ["Inbuilt Proxy (Port 8888)", "Chrome CDP Browser", "Combined Capture (CDP + Proxy)"]
+        self.capture_mode_cb = ttk.Combobox(r1, textvariable=self.capture_mode_var, values=modes, state="readonly", width=30, font=(Theme.FONT_FAMILY, 10))
         self.capture_mode_cb.pack(side="left", padx=5)
 
-        self.btn_capture = ttk.Button(r2, text="🌐 CAPTURE", style="Accent.TButton", command=self.toggle_capture)
+        self.btn_capture = ttk.Button(r1, text="🌐 CAPTURE", style="Accent.TButton", command=self.toggle_capture)
         self.btn_capture.pack(side="left", padx=15)
 
-        ttk.Button(r2, text="🧹 Clear Table", command=self.clear_capture_table).pack(side="left", padx=5)
-        ttk.Button(r2, text="📥 Export to CSV", command=self.export_capture_to_csv).pack(side="left", padx=5)
+        ttk.Button(r1, text="🧹 Clear Table", command=self.clear_capture_table).pack(side="left", padx=5)
+        ttk.Button(r1, text="📥 Export to CSV", command=self.export_capture_to_csv).pack(side="left", padx=5)
 
         # Mid Captured logs table
         table_card = ttk.LabelFrame(paned, text="Captured Traffic Logs", padding=5)
@@ -1200,19 +1311,21 @@ class WebInvaderApp(tk.Tk):
             self.btn_capture.config(text="🌐 CAPTURE", style="Accent.TButton")
         else:
             # Cache active entries thread-safe before initiating backend
-            self.active_target_host = self.target_host_entry.get().strip()
-            self.active_pattern = self.pattern_entry.get().strip()
+            self.active_targets = list(self.targets)
 
             # Save configuration state locally
-            self.config["target_host"] = self.active_target_host
-            self.config["pattern"] = self.active_pattern
+            self.config["targets"] = self.active_targets
             ConfigManager.save(self.config)
 
             mode = self.capture_mode_var.get()
             self.btn_capture.config(text="STOPPING...", state="disabled")
             if mode == "Inbuilt Proxy (Port 8888)":
                 self.start_proxy()
+            elif mode == "Chrome CDP Browser":
+                self.start_playwright()
             else:
+                # Combined Capture (CDP + Proxy): Runs both captures simultaneously to listen the complete local packet flows
+                self.start_proxy()
                 self.start_playwright()
             self.btn_capture.config(text="⏹ STOP CAPTURE", style="Accent.TButton", state="normal")
 
@@ -1236,8 +1349,8 @@ class WebInvaderApp(tk.Tk):
             self.playwright_running = False
 
     def check_and_capture(self, method, url, req_headers, req_body, status_code, resp_headers, resp_body):
-        # Match against filters using thread safe cached values
-        if not matches_filter(url, self.active_target_host, self.active_pattern):
+        # Match against active targets list
+        if not matches_filter(url, self.active_targets):
             return
 
         # Deduplication skipping identical requests
@@ -1312,7 +1425,7 @@ class WebInvaderApp(tk.Tk):
 
     def display_request_details(self, item, text_widget):
         text_widget.delete("1.0", tk.END)
-        headers_str = json.dumps(item.get("request_headers", {}), indent=2) if isinstance(item.get("request_headers"), (dict, list)) else str(item.get("request_headers", ""))
+        headers_str = ReplayEngine.format_headers(item.get("request_headers", {}))
 
         body_val = item.get("request_body", "")
         if isinstance(body_val, bytes):
@@ -1325,7 +1438,7 @@ class WebInvaderApp(tk.Tk):
 
     def display_response_details(self, item, text_widget):
         text_widget.delete("1.0", tk.END)
-        headers_str = json.dumps(item.get("response_headers", {}), indent=2) if isinstance(item.get("response_headers"), (dict, list)) else str(item.get("response_headers", ""))
+        headers_str = ReplayEngine.format_headers(item.get("response_headers", {}))
 
         body_val = item.get("response_body", "")
         if isinstance(body_val, bytes):

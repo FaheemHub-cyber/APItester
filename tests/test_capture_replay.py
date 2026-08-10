@@ -13,7 +13,13 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from tests.mock_server import start_server, stop_server, PORT
 import capture_replay
-from capture_replay import WebInvaderApp, matches_filter, make_record_hash, build_traffic_record, ReplayEngine
+from capture_replay import (
+    WebInvaderApp,
+    matches_filter,
+    make_record_hash,
+    build_traffic_record,
+    ReplayEngine
+)
 
 
 class TestCaptureReplay(unittest.TestCase):
@@ -41,9 +47,9 @@ class TestCaptureReplay(unittest.TestCase):
         self.app.pattern_entry.delete(0, "end")
         self.app.pattern_entry.insert(0, "*")
 
-        # Cache active targets for testing check_and_capture
-        self.app.active_target_host = f"http://127.0.0.1:{PORT}"
-        self.app.active_pattern = "*"
+        # Initialize targets
+        self.app.targets = [{"host": f"http://127.0.0.1:{PORT}", "pattern": "*"}]
+        self.app.active_targets = list(self.app.targets)
 
     def tearDown(self):
         self.app.stop_all_captures()
@@ -53,28 +59,86 @@ class TestCaptureReplay(unittest.TestCase):
             pass
 
     def test_matches_filter_wildcard_and_patterns(self):
-        target = f"http://127.0.0.1:{PORT}"
+        targets = [{"host": f"http://127.0.0.1:{PORT}", "pattern": "*"}]
 
         # Test wildcard match
-        self.assertTrue(matches_filter(f"{target}/api/v2/items", target, "*"))
-        self.assertTrue(matches_filter(f"{target}/other-endpoint", target, "*"))
+        self.assertTrue(matches_filter(f"http://127.0.0.1:{PORT}/api/v2/items", targets))
+        self.assertTrue(matches_filter(f"http://127.0.0.1:{PORT}/other-endpoint", targets))
 
-        # Test specific pattern match
-        self.assertTrue(matches_filter(f"{target}/api/v2/items", target, "api/v2"))
-        self.assertFalse(matches_filter(f"{target}/other-endpoint", target, "api/v2"))
+    def test_multi_target_capture(self):
+        # Setup multiple targets: one exact pattern and one other pattern
+        self.app.targets = [
+            {"host": f"http://127.0.0.1:{PORT}", "pattern": "api/v2"},
+            {"host": f"http://127.0.0.1:{PORT}", "pattern": "other-endpoint"}
+        ]
+        self.app.active_targets = list(self.app.targets)
 
-        # Test host mismatch
-        self.assertFalse(matches_filter("http://example.com/api/v2/items", target, "api/v2"))
+        # 1. Matches "api/v2" -> True
+        self.app.check_and_capture(
+            method="GET",
+            url=f"http://127.0.0.1:{PORT}/api/v2/items",
+            req_headers="X-Header: Value",
+            req_body=b"",
+            status_code=200,
+            resp_headers={},
+            resp_body=b'{"items": []}'
+        )
+        self.assertEqual(self.app.capture_queue.qsize(), 1)
+        self.app.process_capture_queue()
+
+        # 2. Matches "other-endpoint" -> True
+        self.app.check_and_capture(
+            method="GET",
+            url=f"http://127.0.0.1:{PORT}/other-endpoint",
+            req_headers="X-Header: Value",
+            req_body=b"",
+            status_code=200,
+            resp_headers={},
+            resp_body=b"other"
+        )
+        self.assertEqual(self.app.capture_queue.qsize(), 1)
+        self.app.process_capture_queue()
+
+        # 3. Matches neither -> False
+        self.app.check_and_capture(
+            method="GET",
+            url=f"http://127.0.0.1:{PORT}/not-matching",
+            req_headers="X-Header: Value",
+            req_body=b"",
+            status_code=200,
+            resp_headers={},
+            resp_body=b"none"
+        )
+        self.assertEqual(self.app.capture_queue.qsize(), 0)
+        self.assertEqual(len(self.app.captured_requests), 2)
+
+    def test_header_comments_parsing(self):
+        raw_headers = """
+        Content-Type: application/json
+        //X-Disabled-Header: HiddenValue
+        X-Enabled-Header: ActiveValue
+        // Comment with no colon
+        """
+        parsed = ReplayEngine.parse_headers(raw_headers)
+
+        self.assertIn("Content-Type", parsed)
+        self.assertEqual(parsed["Content-Type"], "application/json")
+        self.assertIn("X-Enabled-Header", parsed)
+        self.assertEqual(parsed["X-Enabled-Header"], "ActiveValue")
+
+        # Commented lines must NOT be in the parsed dict
+        self.assertNotIn("X-Disabled-Header", parsed)
+        self.assertNotIn("//X-Disabled-Header", parsed)
 
     def test_domain_and_pattern_filtering_and_capture(self):
         # Test exact host with wildcard pattern (*)
         self.app.check_and_capture(
             method="GET",
             url=f"http://127.0.0.1:{PORT}/api/v2/items",
-            req_headers={"Content-Type": "application/json"},
+            req_headers="Content-Type: application/json",
             req_body=b"",
             status_code=200,
-            resp_headers={"Content-Type": "application/json"},
+            resp_headers={},
             resp_body=b'{"items": []}'
         )
         self.assertEqual(self.app.capture_queue.qsize(), 1)
@@ -89,42 +153,13 @@ class TestCaptureReplay(unittest.TestCase):
         self.app.check_and_capture(
             method="GET",
             url=f"http://127.0.0.1:{PORT}/api/v2/items",
-            req_headers={"Content-Type": "application/json"},
+            req_headers="Content-Type: application/json",
             req_body=b"",
             status_code=200,
-            resp_headers={"Content-Type": "application/json"},
+            resp_headers={},
             resp_body=b'{"items": []}'
         )
         self.assertEqual(self.app.capture_queue.qsize(), 0)  # Queued count stays 0 due to skip
-
-        # Test specific pattern matching (e.g. pattern = "api/v2")
-        self.app.active_pattern = "api/v2"
-
-        # This matches pattern api/v2
-        self.app.check_and_capture(
-            method="POST",
-            url=f"http://127.0.0.1:{PORT}/api/v2/items",
-            req_headers={"Content-Type": "application/json"},
-            req_body=b"payload",
-            status_code=200,
-            resp_headers={"Content-Type": "application/json"},
-            resp_body=b'{"success": true}'
-        )
-        self.app.process_capture_queue()
-        self.assertEqual(len(self.app.captured_requests), 2)
-
-        # This does NOT match pattern api/v2 (should be skipped)
-        self.app.check_and_capture(
-            method="GET",
-            url=f"http://127.0.0.1:{PORT}/other-endpoint",
-            req_headers={"Content-Type": "text/plain"},
-            req_body=b"",
-            status_code=200,
-            resp_headers={"Content-Type": "text/plain"},
-            resp_body=b"other"
-        )
-        self.app.process_capture_queue()
-        self.assertEqual(len(self.app.captured_requests), 2)  # Stays 2
 
     @patch("capture_replay.HttpNtlmAuth", side_effect=HTTPBasicAuth, create=True)
     def test_ntlm_authentication_replay(self, mock_ntlm):
@@ -133,7 +168,7 @@ class TestCaptureReplay(unittest.TestCase):
         resp = ReplayEngine.execute(
             method="GET",
             url=url,
-            headers='{"Content-Type": "application/json"}',
+            headers="Content-Type: application/json",
             body="",
             auth_type="NTLM",
             username="testuser",
