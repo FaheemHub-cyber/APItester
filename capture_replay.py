@@ -178,29 +178,74 @@ def classify_status(status_code):
 class TKHTMLRenderer:
     @classmethod
     def render(cls, parent, html_content, target_name):
+        # Create a container frame to hold both the control bar and the HTML viewer area
+        container = ttk.Frame(parent)
+        container.pack(fill="both", expand=True)
+
+        # Control bar with "Open in Default Browser" button
+        control_bar = ttk.Frame(container, padding=2)
+        control_bar.pack(fill="x", side="top")
+
+        if isinstance(html_content, bytes):
+            html_content_str = html_content.decode("utf-8", errors="ignore")
+        else:
+            html_content_str = str(html_content)
+
+        def open_in_browser():
+            import tempfile
+            import webbrowser
+            try:
+                # Write to temporary file with .html extension
+                with tempfile.NamedTemporaryFile("w", delete=False, suffix=".html", encoding="utf-8") as temp_file:
+                    temp_file.write(html_content_str)
+                    temp_path = temp_file.name
+                webbrowser.open("file://" + temp_path)
+            except Exception as e:
+                messagebox.showerror("Browser Error", f"Failed to open in system browser:\n{str(e)}")
+
+        btn_open = ttk.Button(control_bar, text="🌐 Open in Default Browser", command=open_in_browser)
+        btn_open.pack(side="right", padx=5, pady=2)
+
+        # Now add the actual rendering frame area
+        view_area = ttk.Frame(container)
+        view_area.pack(fill="both", expand=True)
+
+        rendered_obj = None
+        mode = "text"
+
         if HAS_TKINTERWEB:
             try:
-                frame = HtmlFrame(parent)
+                # Sanitization: strip script tags or heavy dynamic contents that are known to crash/segfault
+                # the primitive tkhtml3 parser of tkinterweb.
+                cleaned_html = html_content_str
+                # De-activate script tags
+                for tag in ["<script", "<SCRIPT"]:
+                    if tag in cleaned_html:
+                        cleaned_html = cleaned_html.replace(tag, "<!-- <script")
+                for tag in ["</script>", "</SCRIPT>"]:
+                    if tag in cleaned_html:
+                        cleaned_html = cleaned_html.replace(tag, "</script> -->")
+
+                frame = HtmlFrame(view_area)
                 frame.pack(fill="both", expand=True)
-                if isinstance(html_content, bytes):
-                    html_content = html_content.decode("utf-8", errors="ignore")
-                frame.load_html(html_content)
-                return frame, "html"
+                frame.load_html(cleaned_html)
+                rendered_obj = frame
+                mode = "html"
             except Exception:
                 pass
 
-        # Simple Text Fallback Rendering
-        fb_frame = ttk.Frame(parent)
-        fb_frame.pack(fill="both", expand=True)
-        lbl_info = ttk.Label(fb_frame, text="[Rendering Fallback - Simple Raw Preview]", foreground=Theme.FG_MUTED)
-        lbl_info.pack(anchor="nw", pady=2)
+        if rendered_obj is None:
+            # Simple Text Fallback Rendering if tkinterweb is absent, errors out, or fails
+            lbl_info = ttk.Label(view_area, text="[Rendering Fallback - Simple Raw Preview]", foreground=Theme.FG_MUTED)
+            lbl_info.pack(anchor="nw", pady=2)
 
-        txt = tk.Text(fb_frame, wrap="word", background="#ffffff", relief="flat", borderwidth=1, font=(Theme.FONT_FAMILY, 10))
-        txt.pack(fill="both", expand=True)
-        if isinstance(html_content, bytes):
-            html_content = html_content.decode("utf-8", errors="ignore")
-        txt.insert("1.0", html_content)
-        return txt, "text"
+            txt = tk.Text(view_area, wrap="word", background="#ffffff", relief="flat", borderwidth=1, font=(Theme.FONT_FAMILY, 10))
+            txt.pack(fill="both", expand=True)
+            txt.insert("1.0", html_content_str)
+            rendered_obj = txt
+            mode = "text"
+
+        return container, mode
 
 
 # Calculates deduplication fingerprint hash to skip identical requests
