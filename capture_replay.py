@@ -4,6 +4,20 @@ import threading
 import json
 import csv
 import queue
+
+# Increase Python's built-in CSV field size limit dynamically to handle large payloads,
+# HTML pages, dynamic JSON structures, or long response body fields.
+try:
+    import sys
+    max_limit = sys.maxsize
+    while True:
+        try:
+            csv.field_size_limit(max_limit)
+            break
+        except OverflowError:
+            max_limit = int(max_limit / 10)
+except Exception:
+    pass
 import urllib.parse
 import sys
 import os
